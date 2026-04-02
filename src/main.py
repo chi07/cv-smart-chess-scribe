@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 
 import cv2
+import numpy as np
 
-from detect_grid import detect_cells
+from detect_grid import _extract_lines, detect_cells
 from detect_handwriting import classify_cells
 from preprocess import build_binary_mask, deskew_image, load_image, to_grayscale
 
@@ -41,6 +42,7 @@ def draw_detections(
     image,
     detections: list[dict],
     table_bbox: tuple[int, int, int, int],
+    horizontal_models: list[tuple[float, float]],
 ):
     annotated = image.copy()
     x, y, w, h = table_bbox
@@ -48,11 +50,28 @@ def draw_detections(
 
     for index, detection in enumerate(detections, start=1):
         x0, y0, x1, y1 = detection["bbox"]
-        cv2.rectangle(annotated, (x0, y0), (x1, y1), (0, 0, 255), 2)
+        row = int(detection["row"])
+        if 0 <= row < len(horizontal_models) - 1:
+            top_a, top_b = horizontal_models[row]
+            bot_a, bot_b = horizontal_models[row + 1]
+            polygon = np.array(
+                [
+                    [x0, int(round(top_a * x0 + top_b))],
+                    [x1, int(round(top_a * x1 + top_b))],
+                    [x1, int(round(bot_a * x1 + bot_b))],
+                    [x0, int(round(bot_a * x0 + bot_b))],
+                ],
+                dtype=np.int32,
+            )
+            cv2.polylines(annotated, [polygon], isClosed=True, color=(0, 0, 255), thickness=2)
+            label_y = max(int(round(top_a * x0 + top_b)) + 18, 18)
+        else:
+            cv2.rectangle(annotated, (x0, y0), (x1, y1), (0, 0, 255), 2)
+            label_y = max(y0 + 18, 18)
         cv2.putText(
             annotated,
             str(index),
-            (x0 + 4, max(y0 + 18, 18)),
+            (x0 + 4, label_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
             (0, 128, 255),
@@ -75,14 +94,45 @@ def analyze_image_variant(image, skew_angle: float) -> dict:
     binary = build_binary_mask(gray)
     table_bbox, xs, ys, cells = detect_cells(binary)
     detections = classify_cells(binary, cells, ys)
+    horizontal_models = fit_horizontal_models(binary, table_bbox, ys)
     return {
         "image_data": image,
         "skew_angle": skew_angle,
         "table_bbox": table_bbox,
         "vertical_lines": xs,
         "horizontal_lines": ys,
+        "horizontal_models": horizontal_models,
         "detections": detections,
     }
+
+
+def fit_horizontal_models(
+    binary: np.ndarray,
+    table_bbox: tuple[int, int, int, int],
+    ys: list[int],
+) -> list[tuple[float, float]]:
+    x, y, w, h = table_bbox
+    roi = binary[y : y + h, x : x + w]
+    horizontal_mask = _extract_lines(roi, "horizontal")
+    models: list[tuple[float, float]] = []
+
+    for yy in ys:
+        center = yy - y
+        top = max(center - 6, 0)
+        bottom = min(center + 7, h)
+        band = horizontal_mask[top:bottom, :]
+        points = np.column_stack(np.where(band > 0))
+
+        if len(points) < max(w // 8, 60):
+            models.append((0.0, float(yy)))
+            continue
+
+        xs_band = points[:, 1].astype(float) + x
+        ys_band = points[:, 0].astype(float) + top + y
+        slope, intercept = np.polyfit(xs_band, ys_band, 1)
+        models.append((float(slope), float(intercept)))
+
+    return models
 
 
 def variant_score(result: dict) -> tuple[int, int, int, int]:
@@ -106,9 +156,10 @@ def process_image(image_path: Path, output_paths: dict[str, Path]) -> dict:
     table_bbox = best["table_bbox"]
     xs = best["vertical_lines"]
     ys = best["horizontal_lines"]
+    horizontal_models = best["horizontal_models"]
     detections = best["detections"]
 
-    annotated = draw_detections(image, detections, table_bbox)
+    annotated = draw_detections(image, detections, table_bbox, horizontal_models)
     cv2.imwrite(str(output_paths["annotated"] / image_path.name), annotated)
     save_crops(image, detections, output_paths["cells"], image_path.stem)
 
