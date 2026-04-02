@@ -93,6 +93,9 @@ def _fill_missing_lines(positions: list[int]) -> list[int]:
         return positions
 
     filled = [positions[0]]
+    if positions[0] > int(step * 1.2):
+        filled = [positions[0] - step, positions[0]]
+
     for current in positions[1:]:
         previous = filled[-1]
         gap = current - previous
@@ -114,7 +117,11 @@ def _regularize_main_rows(positions: list[int], row_count: int = 30) -> list[int
 
     base_step = float(np.median(diffs))
     step_candidates = [base_step - 1.0, base_step, base_step + 1.0]
-    start_candidates = positions[: min(4, len(positions))]
+    anchor_index = 0
+    if len(positions) >= 3 and (positions[1] - positions[0]) < base_step * 0.6:
+        anchor_index = 1
+    anchor_position = float(positions[anchor_index])
+    start_candidates = [anchor_position - 1.0, anchor_position, anchor_position + 1.0]
     tolerance = 8.0
 
     best_score = -1
@@ -127,7 +134,9 @@ def _regularize_main_rows(positions: list[int], row_count: int = 30) -> list[int
             for position in positions:
                 if np.min(np.abs(generated - position)) <= tolerance:
                     score += 1
-            if score > best_score:
+            if score > best_score or (
+                score == best_score and best_model is not None and abs(float(start) - anchor_position) < abs(best_model[0] - anchor_position)
+            ):
                 best_score = score
                 best_model = (float(start), float(step))
 

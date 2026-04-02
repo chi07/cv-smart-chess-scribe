@@ -8,7 +8,7 @@ import cv2
 
 from detect_grid import detect_cells
 from detect_handwriting import classify_cells
-from preprocess import build_binary_mask, load_image, to_grayscale
+from preprocess import build_binary_mask, deskew_image, load_image, to_grayscale
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,7 +37,11 @@ def ensure_output_dirs(output_dir: Path) -> dict[str, Path]:
     return paths
 
 
-def draw_detections(image, detections: list[dict], table_bbox: tuple[int, int, int, int]):
+def draw_detections(
+    image,
+    detections: list[dict],
+    table_bbox: tuple[int, int, int, int],
+):
     annotated = image.copy()
     x, y, w, h = table_bbox
     cv2.rectangle(annotated, (x, y), (x + w, y + h), (255, 0, 0), 2)
@@ -66,12 +70,43 @@ def save_crops(image, detections: list[dict], output_dir: Path, stem: str) -> No
         cv2.imwrite(str(output_dir / crop_name), crop)
 
 
-def process_image(image_path: Path, output_paths: dict[str, Path]) -> dict:
-    image = load_image(str(image_path))
+def analyze_image_variant(image, skew_angle: float) -> dict:
     gray = to_grayscale(image)
     binary = build_binary_mask(gray)
     table_bbox, xs, ys, cells = detect_cells(binary)
     detections = classify_cells(binary, cells, ys)
+    return {
+        "image_data": image,
+        "skew_angle": skew_angle,
+        "table_bbox": table_bbox,
+        "vertical_lines": xs,
+        "horizontal_lines": ys,
+        "detections": detections,
+    }
+
+
+def variant_score(result: dict) -> tuple[int, int, int, int]:
+    vertical_score = -abs(len(result["vertical_lines"]) - 5)
+    horizontal_score = -abs(len(result["horizontal_lines"]) - 31)
+    detection_score = min(len(result["detections"]), 120)
+    skew_penalty = -int(round(abs(result["skew_angle"]) * 10))
+    return (vertical_score, horizontal_score, detection_score, skew_penalty)
+
+
+def process_image(image_path: Path, output_paths: dict[str, Path]) -> dict:
+    original_image = load_image(str(image_path))
+    candidates = [analyze_image_variant(original_image, 0.0)]
+
+    deskewed_image, skew_angle = deskew_image(original_image)
+    if abs(skew_angle) >= 0.3:
+        candidates.append(analyze_image_variant(deskewed_image, skew_angle))
+
+    best = max(candidates, key=variant_score)
+    image = best["image_data"]
+    table_bbox = best["table_bbox"]
+    xs = best["vertical_lines"]
+    ys = best["horizontal_lines"]
+    detections = best["detections"]
 
     annotated = draw_detections(image, detections, table_bbox)
     cv2.imwrite(str(output_paths["annotated"] / image_path.name), annotated)
@@ -79,6 +114,7 @@ def process_image(image_path: Path, output_paths: dict[str, Path]) -> dict:
 
     result = {
         "image": image_path.name,
+        "skew_angle_degrees": round(best["skew_angle"], 4),
         "table_bbox": [table_bbox[0], table_bbox[1], table_bbox[0] + table_bbox[2], table_bbox[1] + table_bbox[3]],
         "vertical_lines": xs,
         "horizontal_lines": ys,
