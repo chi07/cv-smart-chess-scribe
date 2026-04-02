@@ -58,7 +58,9 @@ def classify_cells(binary: np.ndarray, cells: list[Cell], ys: list[int]) -> list
 
     wide_columns = _wide_column_indices(cells)
     row_step = _dominant_step(ys)
-    header_cutoff = ys[1] if len(ys) > 1 else 0
+    first_band_height = ys[1] - ys[0] if len(ys) > 1 else 0
+    has_header_band = bool(row_step and first_band_height and first_band_height < row_step * 0.75)
+    header_cutoff = ys[1] if has_header_band and len(ys) > 1 else ys[0] if ys else 0
 
     for cell in cells:
         if cell.col not in wide_columns:
