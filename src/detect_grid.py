@@ -72,6 +72,89 @@ def _line_positions(mask: np.ndarray, axis: str) -> list[int]:
     return _group_positions(indices)
 
 
+def _dominant_step(values: list[int]) -> int:
+    if len(values) < 2:
+        return 0
+    diffs = [b - a for a, b in zip(values, values[1:])]
+    candidates = [diff for diff in diffs if 35 <= diff <= 80]
+    if not candidates:
+        candidates = [diff for diff in diffs if diff > 0]
+    if not candidates:
+        return 0
+    return int(round(float(np.median(candidates))))
+
+
+def _fill_missing_lines(positions: list[int]) -> list[int]:
+    if len(positions) < 2:
+        return positions
+
+    step = _dominant_step(positions)
+    if not step:
+        return positions
+
+    filled = [positions[0]]
+    for current in positions[1:]:
+        previous = filled[-1]
+        gap = current - previous
+        if gap > int(step * 1.6):
+            missing = max(int(round(gap / step)) - 1, 1)
+            for index in range(missing):
+                filled.append(previous + step * (index + 1))
+        filled.append(current)
+    return filled
+
+
+def _regularize_main_rows(positions: list[int], row_count: int = 30) -> list[int]:
+    if len(positions) < 8:
+        return positions
+
+    diffs = [b - a for a, b in zip(positions, positions[1:]) if 40 <= (b - a) <= 70]
+    if not diffs:
+        return positions
+
+    base_step = float(np.median(diffs))
+    step_candidates = [base_step - 1.0, base_step, base_step + 1.0]
+    start_candidates = positions[: min(4, len(positions))]
+    tolerance = 8.0
+
+    best_score = -1
+    best_model: tuple[float, float] | None = None
+
+    for start in start_candidates:
+        for step in step_candidates:
+            generated = np.array([start + step * idx for idx in range(row_count + 1)], dtype=float)
+            score = 0
+            for position in positions:
+                if np.min(np.abs(generated - position)) <= tolerance:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best_model = (float(start), float(step))
+
+    if best_model is None:
+        return positions
+
+    start, step = best_model
+    matched_indices: list[int] = []
+    matched_positions: list[int] = []
+    for position in positions:
+        index = int(round((position - start) / step))
+        if 0 <= index <= row_count:
+            target = start + step * index
+            if abs(position - target) <= tolerance:
+                matched_indices.append(index)
+                matched_positions.append(position)
+
+    if len(matched_indices) >= 6:
+        indices = np.array(matched_indices, dtype=float)
+        observed = np.array(matched_positions, dtype=float)
+        slope, intercept = np.polyfit(indices, observed, 1)
+        start = float(intercept)
+        step = float(slope)
+
+    return [int(round(start + step * idx)) for idx in range(row_count + 1)]
+
+
 def detect_grid_lines(binary: np.ndarray, table_bbox: tuple[int, int, int, int]) -> tuple[list[int], list[int]]:
     x, y, w, h = table_bbox
     roi = binary[y : y + h, x : x + w]
@@ -81,6 +164,9 @@ def detect_grid_lines(binary: np.ndarray, table_bbox: tuple[int, int, int, int])
 
     ys = _line_positions(horizontal, "horizontal")
     xs = _line_positions(vertical, "vertical")
+
+    ys = _fill_missing_lines(ys)
+    ys = _regularize_main_rows(ys)
 
     xs = [x + value for value in xs]
     ys = [y + value for value in ys]
