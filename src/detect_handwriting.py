@@ -45,10 +45,34 @@ def _count_components(binary_roi: np.ndarray) -> tuple[int, float]:
     if component_count <= 1:
         return 0, 0.0
 
-    areas = stats[1:, cv2.CC_STAT_AREA]
-    useful = areas[(areas >= 8) & (areas <= binary_roi.size * 0.6)]
+    areas   = stats[1:, cv2.CC_STAT_AREA]
+    widths  = stats[1:, cv2.CC_STAT_WIDTH].astype(float)
+    heights = stats[1:, cv2.CC_STAT_HEIGHT].astype(float)
+    aspect  = widths / np.maximum(heights, 1)
+
+    # Loại nhiễu quá nhỏ, component quá lớn (nền), và đường kẻ ngang chảy vào
+    # ROI (aspect ratio w/h > 5 → dải ngang mỏng, không phải nét chữ).
+    mask  = (areas >= 8) & (areas <= binary_roi.size * 0.6) & (aspect <= 5.0)
+    useful = areas[mask]
     largest = float(useful.max()) if useful.size else 0.0
     return int(useful.size), largest
+
+
+def _left_ink_ratio(binary_roi: np.ndarray, left_fraction: float = 1 / 4) -> float:
+    """Tỉ lệ mực nằm trong vùng left_fraction bên trái ROI.
+
+    Số in sẵn (số thứ tự nước đi) luôn nằm sát cạnh trái ô → left_ratio ≈ 0.9–1.0.
+    Chữ viết tay (ký hiệu nước đi) trải đều hoặc lệch phải → left_ratio ≈ 0.3–0.5.
+    Ngưỡng phân biệt thực nghiệm: 0.75.
+    """
+    if binary_roi.size == 0:
+        return 0.5
+    split = max(1, int(binary_roi.shape[1] * left_fraction))
+    left_ink = int(np.count_nonzero(binary_roi[:, :split]))
+    total_ink = int(np.count_nonzero(binary_roi))
+    if total_ink == 0:
+        return 0.5
+    return left_ink / total_ink
 
 
 def classify_cells(binary: np.ndarray, cells: list[Cell], ys: list[int]) -> list[dict]:
@@ -82,10 +106,15 @@ def classify_cells(binary: np.ndarray, cells: list[Cell], ys: list[int]) -> list
 
         ink_ratio = _ink_ratio(roi)
         component_count, largest_component = _count_components(roi)
+        left_ratio = _left_ink_ratio(roi)
 
-        if ink_ratio < 0.015:
+        if ink_ratio < 0.006:
             continue
-        if component_count < 2 and largest_component < 25:
+        if component_count < 2 and largest_component < 60:
+            continue
+        # Loại ô có mực tập trung ở cạnh trái VÀ tổng mực ít → số thứ tự in sẵn.
+        # Chữ viết tay đôi khi cũng lệch trái nhưng có ink_ratio cao hơn (nét dày hơn).
+        if left_ratio > 0.75 and ink_ratio < 0.035:
             continue
 
         detections.append(
@@ -95,6 +124,7 @@ def classify_cells(binary: np.ndarray, cells: list[Cell], ys: list[int]) -> list
                 "bbox": [cell.x, cell.y, cell.x + cell.w, cell.y + cell.h],
                 "ink_ratio": round(ink_ratio, 4),
                 "component_count": component_count,
+                "left_ratio": round(left_ratio, 4),
             }
         )
 

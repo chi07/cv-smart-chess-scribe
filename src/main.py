@@ -89,11 +89,27 @@ def save_crops(image, detections: list[dict], output_dir: Path, stem: str) -> No
         cv2.imwrite(str(output_dir / crop_name), crop)
 
 
+def remove_grid_lines(binary: np.ndarray) -> np.ndarray:
+    """Trả về binary mask đã xóa đường kẻ ngang/dọc của bảng.
+
+    _extract_lines dùng MORPH_OPEN với kernel dài (width//30 px), nên chỉ giữ
+    lại những nét liên tục đủ dài — đường kẻ bảng. Nét chữ viết tay ngắn hơn
+    nhiều nên không bị ảnh hưởng.
+    """
+    h_lines = _extract_lines(binary, "horizontal")
+    v_lines = _extract_lines(binary, "vertical")
+    grid_mask = cv2.bitwise_or(h_lines, v_lines)
+    return cv2.bitwise_and(binary, cv2.bitwise_not(grid_mask))
+
+
 def analyze_image_variant(image, skew_angle: float) -> dict:
     gray = to_grayscale(image)
     binary = build_binary_mask(gray)
     table_bbox, xs, ys, cells = detect_cells(binary)
-    detections = classify_cells(binary, cells, ys)
+    # Xóa đường kẻ bảng khỏi mask trước khi phân tích nội dung ô,
+    # tránh grid line chảy vào padded ROI gây false positive.
+    content_binary = remove_grid_lines(binary)
+    detections = classify_cells(content_binary, cells, ys)
     horizontal_models = fit_horizontal_models(binary, table_bbox, ys)
     return {
         "image_data": image,
@@ -118,8 +134,8 @@ def fit_horizontal_models(
 
     for yy in ys:
         center = yy - y
-        top = max(center - 6, 0)
-        bottom = min(center + 7, h)
+        top = max(center - 12, 0)
+        bottom = min(center + 13, h)
         band = horizontal_mask[top:bottom, :]
         points = np.column_stack(np.where(band > 0))
 
