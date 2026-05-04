@@ -67,10 +67,16 @@ pip install -r requirements.txt
 
 ## Cách chạy
 
-Chạy toàn bộ ảnh trong thư mục `dataset`:
+Chạy với đúng một ảnh đầu vào:
 
 ```bash
-python3 src/main.py --input-dir dataset --output-dir output
+python3 src/main.py 001_0.png
+```
+
+Hoặc truyền đường dẫn ảnh đầy đủ/ tương đối:
+
+```bash
+python3 src/main.py dataset/001_0.png
 ```
 
 Sau khi chạy xong, kết quả sẽ nằm trong:
@@ -98,7 +104,7 @@ Mục tiêu:
 Việc cần làm:
 
 - Cài dependency.
-- Chạy `python3 src/main.py --input-dir dataset --output-dir output`.
+- Chạy `python3 src/main.py 001_0.png`.
 - Mở thư mục `output/annotated/` để xem kết quả.
 
 ### Bước 2: Đánh giá thủ công trên từng ảnh

@@ -15,14 +15,8 @@ from preprocess import build_binary_mask, deskew_image, load_image, to_grayscale
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Detect handwritten move cells in chess scoresheets.")
     parser.add_argument(
-        "--input-dir",
-        default="dataset",
-        help="Directory containing input images.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="output",
-        help="Directory to save annotated images, crops, and JSON metadata.",
+        "image",
+        help="Input image name or path.",
     )
     return parser.parse_args()
 
@@ -194,25 +188,16 @@ def process_image(image_path: Path, output_paths: dict[str, Path]) -> dict:
 
 def main() -> None:
     args = parse_args()
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+    image_path = Path(args.image)
+    if not image_path.exists():
+        image_path = Path("dataset") / args.image
+    if not image_path.exists():
+        raise FileNotFoundError(f"Input image not found: {args.image}")
+
+    output_dir = Path("output")
     output_paths = ensure_output_dirs(output_dir)
-
-    image_paths = sorted(
-        [
-            path
-            for path in input_dir.iterdir()
-            if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-        ]
-    )
-    if not image_paths:
-        raise FileNotFoundError(f"No images found in {input_dir}")
-
-    summary = []
-    for image_path in image_paths:
-        result = process_image(image_path, output_paths)
-        summary.append({"image": result["image"], "detections": len(result["detections"])})
-
+    result = process_image(image_path, output_paths)
+    summary = {"image": result["image"], "detections": len(result["detections"])}
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 
